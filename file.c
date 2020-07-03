@@ -18,13 +18,6 @@
 
 #include "main.h"
 #include "vitashell_error.h"
-//#include "browser.h"
-//#include "init.h"
-//#include "archive.h"
-//#include "file.h"
-//#include "utils.h"
-//#include "sha1.h"
-//#include "strnatcmp.h"
 
 static char *devices[] = {
     "gro0:",

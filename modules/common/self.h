@@ -1,6 +1,7 @@
 #pragma once
 
 #include <inttypes.h>
+#include <stdbool.h>
 
 // some info taken from the wiki, see http://vitadevwiki.com/index.php?title=SELF_File_Format
 
@@ -116,6 +117,217 @@ typedef struct {
 	SCE_controlinfo common;
 	char unk[0x40];
 } SCE_controlinfo_7;
+
+typedef struct {
+  uint32_t magic;
+  uint32_t version;
+  uint8_t _platform;
+  uint8_t key_revision;
+  uint16_t _sce_type;
+  uint32_t metadata_offset;
+  uint64_t header_length;
+  uint64_t data_length;
+} SceHeader;
+
+typedef struct {
+  uint64_t file_length;
+  uint64_t field_8;
+  uint64_t self_offset;
+  uint64_t appinfo_offset;
+  uint64_t elf_offset;
+  uint64_t phdr_offset;
+  uint64_t shdr_offset;
+  uint64_t segment_info_offset;
+  uint64_t sceversion_offset;
+  uint64_t controlinfo_offset;
+  uint64_t controlinfo_length;
+} SelfHeader;
+
+typedef struct {
+	uint64_t authid;
+	uint32_t vendor_id;
+	uint32_t _self_type;
+	uint64_t sys_version;
+	uint64_t field_18;
+} AppInfoHeader;
+
+typedef struct {
+  unsigned char e_ident_1[8];
+  unsigned char e_ident_2[8];
+  uint16_t e_type;
+  uint16_t e_machine;
+  uint32_t e_version;
+  uint32_t e_entry;
+  uint32_t e_phoff;
+  uint32_t e_shoff;
+  uint32_t e_flags;
+  uint16_t e_ehsize;
+  uint16_t e_phentsize;
+  uint16_t e_phnum;
+  uint16_t e_shentsize;
+  uint16_t e_shnum;
+  uint16_t e_shstrndx;
+} ElfHeader;
+
+typedef struct {
+  uint32_t p_type;
+  uint32_t p_offset;
+  uint32_t p_vaddr;
+  uint32_t p_paddr;
+  uint32_t p_filesz;
+  uint32_t p_memsz;
+  uint32_t p_flags;
+  uint32_t p_align;
+} ElfPhdr;
+
+typedef struct {
+	uint64_t offset;
+	uint64_t size;
+	uint32_t _compressed;
+  uint32_t field_14;
+  uint32_t _plaintext;
+  uint32_t field_1C;
+} SegmentInfo;
+
+typedef struct {
+  unsigned char key[16];
+  uint64_t pad0;
+  uint64_t pad1;
+  unsigned char iv[16];
+  uint64_t pad2;
+  uint64_t pad3;
+} MetadataInfo;
+
+typedef struct {
+  uint64_t signature_input_length;
+  uint32_t signature_type;
+  uint32_t section_count;
+  uint32_t key_count;
+  uint32_t opt_header_size;
+  uint32_t field_18;
+  uint32_t field_1C;
+} MetadataHeader;
+
+typedef struct {
+  uint64_t offset;
+  uint64_t size;
+  uint32_t type;
+  int32_t seg_idx;
+  uint32_t hashtype;
+  int32_t hash_idx;
+  uint32_t _encryption;
+  int32_t key_idx;
+  int32_t iv_idx;
+  uint32_t _compression;
+} MetadataSection;
+
+typedef struct {
+  uint32_t field_0;
+  uint32_t field_4;
+  uint64_t sys_version;
+  uint32_t field_10;
+  uint32_t field_14;
+  uint32_t field_18;
+  uint32_t field_1C;
+} SrvkHeader;
+
+typedef struct {
+  uint32_t field_0;
+  uint32_t _pkg_type;
+  uint32_t flags;
+  uint32_t field_C;
+  uint64_t update_version;
+  uint64_t final_size;
+  uint64_t decrypted_size;
+  uint32_t field_28;
+  uint32_t field_30;
+  uint32_t field_34;
+  uint32_t field_38;
+  uint64_t field_3C;
+  uint64_t field_40;
+  uint64_t field_48;
+  uint64_t offset;
+  uint64_t size;
+  uint64_t part_idx;
+  uint64_t total_parts;
+  uint64_t field_70;
+  uint64_t field_78;
+} SpkgHeader;
+
+typedef struct {
+  uint32_t subtype;
+  uint32_t is_present;
+  uint64_t size;
+} SceVersionInfo;
+
+typedef struct {
+  uint32_t control_type;
+  uint32_t size;
+  uint64_t more;
+} SceControlInfo;
+
+typedef struct {
+  unsigned char sce_hash[20];
+  unsigned char file_hash[32];
+  uint32_t filler1;
+  uint32_t filler2;
+  uint32_t sdk_version;
+} SceControlInfoDigest256;
+
+typedef struct {
+  uint32_t magic;
+  uint16_t sig_offset;
+  uint16_t size;
+  uint32_t npdrm_type;
+  uint32_t field_C;
+  unsigned char content_id[0x30];
+  unsigned char digest1[0x10];
+  unsigned char hash1[0x20];
+  unsigned char hash2[0x20];
+  unsigned char sig1r[0x1C];
+  unsigned char sig1s[0x1C];
+  unsigned char sig2r[0x1C];
+  unsigned char sig2s[0x1C];
+} SceControlInfoDrm;
+
+typedef struct {
+  uint16_t majver;
+  uint16_t minver;
+  uint16_t style;
+  uint16_t riftype;
+  uint64_t cid;
+  unsigned char content_id[0x30];
+  unsigned char actidx[0x10];
+  unsigned char klicense[0x10];
+  unsigned char dates[0x10];
+  unsigned char filler[0x8];
+  unsigned char sig1r[0x14];
+  unsigned char sig1s[0xC];
+} SceRIF;
+
+typedef struct {
+  uint64_t offset;
+  int32_t idx;
+  uint64_t size;
+  bool compressed;
+  char *key;
+  char *iv;
+} SceSegment;
+
+typedef struct {
+} SCE_KEYS;
+
+typedef struct {
+  SCE_KEYS keys[1];
+} KeyStore;
+
+typedef struct {
+  uint64_t minver;
+  uint64_t maxver;
+  int keyrev;
+  char *key;
+  char *iv;
+} KeyEntry;
 
 #pragma pack(pop)
 

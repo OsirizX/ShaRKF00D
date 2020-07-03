@@ -8,14 +8,98 @@
 #include "modules/kplugin//kentente.h"
 #include "modules/uplugin/userAllied.h"
 #include "sce-elf.h"
+#include "aes.h"
 
 #include "debugscreen/debugScreen.h"
 #define printf psvDebugScreenPrintf
 
 #define OUT_FOLDER "ux0:/ShaRKF00D"
+#define TITLEID "PCSI00011"
+
 #define DECOMPRESS_NEW   0x01
 #define DECOMPRESS_DONE  0x02
 #define DECOMPRESS_SEGOK 0x04
+
+#define CONTROL_TYPE_CONTROL_FLAGS 1
+#define CONTROL_TYPE_DIGEST_SHA1 2
+#define CONTROL_TYPE_NPDRM_PS3 3
+#define CONTROL_TYPE_DIGEST_SHA256 4
+#define CONTROL_TYPE_NPDRM_VITA 5
+#define CONTROL_TYPE_UNK_SIG1 6
+#define CONTROL_TYPE_UNK_HASH1 7
+
+#define SECURE_BOOL_UNUSED 0
+#define SECURE_BOOL_NO 1
+#define SECURE_BOOL_YES 2
+
+#define SCE_TYPE_SELF 1
+#define SCE_TYPE_SRVK 2
+#define SCE_TYPE_SPKG 3
+#define SCE_TYPE_DEV 0xC0
+
+#define SELF_TYPE_NONE 0
+#define SELF_TPYPE_KERNEL 0x07
+#define SELF_TYPE_APP 0x08
+#define SELF_TYPE_BOOT 0x09
+#define SELF_TYPE_SECURE 0x0B
+#define SELF_TYPE_USER 0x0D
+
+#define KEY_TYPE_METADATA 0
+#define KEY_TYPE_NPDRM 1
+
+#define SELF_PLATFORM_PS3 0
+#define SELF_PLATFORM_VITA 0x40
+
+#define SPKG_TYPE_TYPE_0 0x0
+#define SPKG_TYPE_OS0 0x1
+#define SPKG_TYPE_TYPE_2 0x2
+#define SPKG_TYPE_TYPE_3 0x3
+#define SPKG_TYPE_PERMISSIONS_4 0x4
+#define SPKG_TYPE_TYPE_5 0x5
+#define SPKG_TYPE_TYPE_6 0x6
+#define SPKG_TYPE_TYPE_7 0x7
+#define SPKG_TYPE_SYSCON_8 0x8
+#define SPKG_TYPE_BOOT 0x9
+#define SPKG_TYPE_VS0 0xA
+#define SPKG_TYPE_CPFW 0xB
+#define SPKG_TYPE_MOTION_C 0xC
+#define SPKG_TYPE_BBMC_D 0xD
+#define SPKG_TYPE_TYPE_E 0xE
+#define SPKG_TYPE_MOTION_F 0xF
+#define SPKG_TYPE_TOUCH_10 0x10
+#define SPKG_TYPE_TOUCH_11 0x11
+#define SPKG_TYPE_SYSCON_12 0x12
+#define SPKG_TYPE_SYSCON_13 0x13
+#define SPKG_TYPE_SYSCON_14 0x14
+#define SPKG_TYPE_TYPE_15 0x15
+#define SPKG_TYPE_VS0_TAR_PATCH 0x16
+#define SPKG_TYPE_SA0 0x17
+#define SPKG_TYPE_PD0 0x18
+#define SPKG_TYPE_SYSCON_19 0x19
+#define SPKG_TYPE_TYPE_1A 0x1A
+#define SPKG_TYPE_PSPEMU_LIST 0x1B
+
+#define CONTROL_TYPE_CONTROL_FLAGS 1
+#define CONTROL_TYPE_DIGEST_SHA1 2
+#define CONTROL_TYPE_NPDRM_PS3 3
+#define CONTROL_TYPE_DIGEST_SHA256 4
+#define CONTROL_TYPE_NPDRM_VITA 5
+#define CONTROL_TYPE_UNK_SIG1 6
+#define CONTROL_TYPE_UNK_HASH1 7
+
+#define SECURE_BOOL_UNUSED 0
+#define SECURE_BOOL_NO 1
+#define SECURE_BOOL_YES 2
+
+#define ENCRYPTION_TYPE_NONE 1
+#define ENCRYPTION_TYPE_AES128CTR 3
+
+#define HASH_TYPE_NONE 1
+#define HASH_TYPE_HMACSHA1 2
+#define HASH_TYPE_HMACSHA256 6
+
+#define COMPRESSION_TYPE_NONE 1
+#define COMPRESSION_TYPE_DEFLATE 2
 
 #define htole32(x) ((uint32_t)(x))
 
@@ -28,23 +112,16 @@ static SceUID decompressThread_tid, decompress_flag;
 static char *current_file, *current_elf, *current_self;
 static int dump_type = DUMP_ELF;
 
-int extract(const char *path) {
+int extract(const char *src, const char *dst, const char *titleid) {
   int res;
+  char path[MAX_PATH_LENGTH];
 
   pfsUmount();
 
+  snprintf(path, MAX_PATH_LENGTH, "ux0:app/%s", titleid);
   res = pfsMount(path);
 
-  // In case we're at ux0:patch or grw0:patch we need to apply the mounting at ux0:app or gro0:app
-  if (res < 0) {
-    if (strncasecmp(path, "ux0:patch", 9) == 0 ||
-        strncasecmp(path, "grw0:patch", 10) == 0) {
-        snprintf(path, MAX_PATH_LENGTH, "ux0:app/%s", "PCSI00011");
-        res = pfsMount(path);
-    }
-  }
-
-  copyFile("ux0:/patch/PCSI00011/module/libshacccg.suprx", "ux0:/data/libshacccg.suprx", 0);
+  copyFile(src, dst, 0);
   printf("extract done\n");
   pfsUmount();
   return 0;
@@ -78,8 +155,8 @@ int decompressThread(unsigned int argc,  void *argv) {
 							char *padding = malloc(padding_sz);
 							if(padding) {
 								memset(padding, 0, padding_sz);
-								if((res = WriteFileSeek(current_elf, padding, padding_off, padding_sz))<0) 
-										printf("Could not write padding: %i,%i\n", i, res);
+								if((res = WriteFileSeek(current_elf, padding, padding_off, padding_sz))<0)
+									printf("Could not write padding: %i,%i\n", i, res);
 								free(padding);
 							} else
 								printf("Could not generate padding: %i,%x,%x\n", i, padding_sz, padding_off);
@@ -106,7 +183,6 @@ int decompressThread(unsigned int argc,  void *argv) {
 					free(dest_buf);
 					break;
 				}
-
 				if((res = uncompress(dest_buf, (long unsigned int *)&seg_sz, file_buf, sz))!= Z_OK) {
 					seg_sz =  phdrs[i].p_filesz;
 					printf("Could not decompress segment, will attempt inflate: %i,%i,%x\n", i, res, phdrs[i].p_type);
@@ -128,10 +204,10 @@ int decompressThread(unsigned int argc,  void *argv) {
 						printf("Could not write decrypted segment to self: %i,%x\n", i, res);
 				}
 				free(file_buf);
-				if((res = WriteFileSeek(current_elf, dest_buf, phdrs[i].p_offset, phdrs[i].p_filesz))<0) 
+				if((res = WriteFileSeek(current_elf, dest_buf, phdrs[i].p_offset, phdrs[i].p_filesz))<0)
 					printf("Could not write decrypted segment to elf: %i,%x\n", i, res);
 				free(dest_buf);
-				if((res = sceIoRemove(current_path))<0) 
+				if((res = sceIoRemove(current_path))<0)
 					printf("Could not remove decrypted segment to elf: %i,%x\n", i, res);
 				printf("Finished segment %i\n", i);
 			}
@@ -182,10 +258,9 @@ int dumpVerifyElf(const char *path,  uint8_t *orig_elf_digest) {
 	return res;
 }
 
-int decrypt(void) {
+int decrypt(const char *text, const char *elf_path, const char *titleid) {
 	char aid[8];
 	int res;
-	sceIoMkdir(OUT_FOLDER"",6);
 	if(userAlliedStatus() != ENTENTE_DONE) {
 		printf("ERROR kuEntente is busy\n");
 	}
@@ -200,11 +275,7 @@ int decrypt(void) {
 		return 0;
 	}
 	printf("Obtaining Fixed Rif name: %s\n", rif_name);
-  char *text = "ux0:/data/libshacccg.suprx";
-	char titleid[20];
 	char rif_path[PATH_MAX];
-	char out_path[PATH_MAX];
-	char elf_path[PATH_MAX];
 	char mount_point[0x11];
 	int auth_type = 0;
 	int system = 0;
@@ -216,13 +287,7 @@ int decrypt(void) {
     auth_type = 0;
     system = 1;
 			printf("Decrypting: %s\n", text);
-			snprintf(elf_path, PATH_MAX, OUT_FOLDER"/%s.elf","libshacccg.suprx"); 
 			current_file = current_elf = elf_path;
-			if(dump_type == DUMP_SELF) {
-				snprintf(out_path, PATH_MAX, OUT_FOLDER"/%s","libshacccg.suprx"); 
-				current_file = out_path;
-				current_elf = elf_path;
-			}
 			printf("Outpath: %s\n", current_file);
 
 			current_self = malloc(HEADER_LEN);
@@ -234,7 +299,6 @@ int decrypt(void) {
 			if((res = ReadFile(text, current_self, HEADER_LEN)) < 0) {
 				printf("Could not read original self: %x\n", res);
 				free(current_self);
-				//menu_entry = menu_entry->next ;
 			}
 
 			char temp_outpath[PATH_MAX];
@@ -265,9 +329,8 @@ int decrypt(void) {
 			  printf("param.path_id %d\n", param.path_id);
 				if(param.path_id == 24||param.path_id == 23) {
 					auth_type = 1;
-	        strncpy(titleid, "PCSI00011", 20);
 					printf("Setting title id to: %s\n", titleid);
-					snprintf(rif_path, PATH_MAX, "ux0:app/%s/sce_sys/package/work.bin",titleid);
+					snprintf(rif_path, PATH_MAX, "ux0:app/%s/sce_sys/package/work.bin", titleid);
 			    printf("rif_path %s\n", rif_path);
 					if(checkExists(rif_path)!=0) {
 						printf("work.bin not found: %s\n", rif_path);
@@ -399,7 +462,256 @@ int decrypt(void) {
 	return 0;
 }
 
-int make_fself(void) {
+SceSegment *get_segments(SceUID *inf, SceHeader *sce_hdr, KeyEntry *ke, const uint64_t sysver, uint32_t self_type, int keytype, unsigned char *klictxt) {
+  unsigned char *dat = (unsigned char *)malloc(sizeof(unsigned char)*(sce_hdr->header_length - sce_hdr->metadata_offset - 48));
+  sceIoLseek(*inf, sce_hdr->metadata_offset + 48, SCE_SEEK_SET);
+  sceIoRead(*inf, &dat[0], sizeof(unsigned char)*(sce_hdr->header_length - sce_hdr->metadata_offset - 48));
+  printf("dat: %llx\n", *(uint64_t *)dat);
+
+  const char *key = ke->key;
+  const char *iv = ke->iv;
+  aes_context aes_ctx;
+  MetadataInfo dec_in;
+
+  if (self_type == SELF_TYPE_APP) {
+    keytype = 0;
+    if (sce_hdr->key_revision >= 2)
+        keytype = 1;
+    unsigned char np_key_bytes[16] = { 0x16, 0x41, 0x9d, 0xd3, 0xbf, 0xbe, 0x8b, 0xdc, 0x59, 0x69, 0x29, 0xb7, 0x2c, 0xe2, 0x37, 0xcd };
+    unsigned char np_iv_bytes[16];
+    unsigned char predec[16];
+    aes_setkey_dec(&aes_ctx, np_key_bytes, 128);
+    memset(np_iv_bytes, 0, sizeof(np_iv_bytes));
+    aes_crypt_cbc(&aes_ctx, AES_DECRYPT, sizeof(predec), np_iv_bytes, klictxt, predec);
+    printf("predec: %llx %llx\n", *(uint64_t *)&predec[0], *(uint64_t *)(&predec[8]));
+
+    aes_setkey_dec(&aes_ctx, predec, 128);
+    memset(np_iv_bytes, 0, sizeof(np_iv_bytes));
+    aes_crypt_cbc(&aes_ctx, AES_DECRYPT, sizeof(MetadataInfo), np_iv_bytes, &dat[0], (unsigned char *)&dec_in);
+    printf("dec_in: %llx\n", *(uint64_t *)&dec_in);
+  } else {
+    memcpy((unsigned char *)&dec_in, &dat[0], sizeof(MetadataInfo));
+  }
+  MetadataInfo dec;
+
+  unsigned char key_bytes[32] = { 0x12, 0xd6, 0x4d, 0x01, 0x72, 0x49, 0x52, 0x26, 0x01, 0x0a, 0x68, 0x7d, 0xe2, 0x45, 0xa7, 0x3d, 0xe0, 0x28, 0xb3, 0x56, 0x1e, 0x25, 0xe6, 0x9b, 0xab, 0xc3, 0x25, 0x63, 0x6f, 0x3c, 0xae, 0x0a };
+  unsigned char iv_bytes[16] = { 0xf1, 0x49, 0xee, 0xd1, 0x75, 0x7e, 0x5a, 0x91, 0x5b, 0x24, 0x30, 0x97, 0x95, 0xbf, 0xc3, 0x80 };
+  aes_setkey_dec(&aes_ctx, key_bytes, 256);
+  aes_crypt_cbc(&aes_ctx, AES_DECRYPT, 64, iv_bytes, (unsigned char *)&dec_in, (unsigned char *)&dec);
+
+  MetadataInfo *metadata_info = (MetadataInfo *)(&dec);
+  printf("key: %llx\n", *(uint64_t *)metadata_info->key);
+
+  unsigned char *dec1 = (unsigned char *)malloc(sizeof(unsigned char) * (sce_hdr->header_length - sce_hdr->metadata_offset - 48 - sizeof(MetadataInfo)));
+  aes_setkey_dec(&aes_ctx, metadata_info->key, 128);
+  aes_crypt_cbc(&aes_ctx, AES_DECRYPT, sce_hdr->header_length - sce_hdr->metadata_offset - 48 - sizeof(MetadataInfo), metadata_info->iv, &dat[64], &dec1[0]);
+
+  MetadataHeader *metadata_hdr = (MetadataHeader *)(&dec1[0]);
+  printf("signature_input_length: 0x%llx\n", metadata_hdr->signature_input_length);
+
+  SceSegment *segs = (SceSegment *)malloc(sizeof(SceSegment)*metadata_hdr->section_count);
+  off_t start = sizeof(MetadataHeader) + metadata_hdr->section_count * sizeof(MetadataSection);
+  char **key_vault = (char **)malloc(sizeof(char)*metadata_hdr->key_count);
+
+  for (uint32_t i = 0; i < metadata_hdr->key_count; i++) {
+    key_vault[i] = (char *)malloc(sizeof(char)*16);
+    memcpy(key_vault[i], (char *)(&dec1[0] + (start + (16 * i))), sizeof(char)*16);
+  }
+
+  for (uint32_t i = 0; i < metadata_hdr->section_count; i++) {
+    MetadataSection *metsec = (MetadataSection *)(&dec1[0] + sizeof(MetadataHeader) + (i * sizeof(MetadataSection)));
+
+    if (metsec->_encryption == ENCRYPTION_TYPE_AES128CTR) {
+      segs[i].offset = metsec->offset;
+      segs[i].idx = metsec->seg_idx;
+      segs[i].compressed = (metsec->_compression == COMPRESSION_TYPE_DEFLATE);
+      segs[i].key = key_vault[metsec->key_idx];
+      segs[i].iv = key_vault[metsec->iv_idx];
+    }
+  }
+
+  if (dat)
+    free(dat);
+
+  return segs;
+}
+
+unsigned char *decompress_segments(const unsigned char *decrypted_data, const size_t size, size_t *decompressed_size) {
+  z_stream stream;
+  stream.zalloc = Z_NULL;
+  stream.zfree = Z_NULL;
+  stream.opaque = Z_NULL;
+  stream.avail_in = 0;
+  stream.next_in = Z_NULL;
+  if (inflateInit(&stream) != Z_OK) {
+      printf("inflateInit failed while decompressing\n");
+      return "";
+  }
+
+  int ret = 0;
+  stream.next_in = (Bytef *)decrypted_data;
+  stream.avail_in = sizeof(unsigned char)*size;
+  unsigned char *decompressed_data = (unsigned char *)malloc(sizeof(unsigned char)*5*1024*1024);;
+
+  stream.next_out = (Bytef *)decompressed_data;
+  stream.avail_out = 5*1024*1024;
+
+  ret = inflate(&stream, 0);
+  *decompressed_size = stream.total_out;
+
+  inflateEnd(&stream);
+
+  if (ret != Z_STREAM_END) {
+      printf("Exception during zlib decompression: ({}) {}", ret, stream.msg);
+      return "";
+  }
+  return decompressed_data;
+}
+
+int self2elf(const char *infile, const char *outfile, const char *klictxt) {
+  SceUID inf = sceIoOpen(infile, SCE_O_RDONLY, 0777);
+  SceUID outf = sceIoOpen(outfile, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
+  int npdrmtype = 0;
+
+  SceHeader sce_hdr = { 0 };
+  sceIoRead(inf, &sce_hdr, sizeof(SceHeader));
+  printf("magic: 0x%x\n", sce_hdr.magic);
+  printf("data_length: 0x%llx\n", sce_hdr.data_length);
+
+  SelfHeader self_hdr = { 0 };
+  sceIoRead(inf, &self_hdr, sizeof(SelfHeader));
+
+  AppInfoHeader appinfo_hdr = { 0 };
+  sceIoLseek(inf, self_hdr.appinfo_offset, SCE_SEEK_SET);
+  sceIoRead(inf, &appinfo_hdr, sizeof(AppInfoHeader));
+  printf("sys_version: 0x%llx\n", appinfo_hdr.sys_version);
+
+  SceVersionInfo verinfo_hdr = { 0 };
+  sceIoLseek(inf, self_hdr.sceversion_offset, SCE_SEEK_SET);
+  sceIoRead(inf, &verinfo_hdr, sizeof(SceVersionInfo));
+
+  SceControlInfo controlinfo_hdr = { 0 };
+  sceIoLseek(inf, self_hdr.controlinfo_offset, SCE_SEEK_SET);
+  sceIoRead(inf, &controlinfo_hdr, sizeof(SceControlInfo));
+  printf("size: 0x%lx\n", controlinfo_hdr.size);
+  size_t ci_off = sizeof(SceControlInfo);
+
+  SceControlInfoDigest256 controldigest256 = { 0 };
+  if (controlinfo_hdr.control_type == CONTROL_TYPE_DIGEST_SHA256) {
+    sceIoLseek(inf, self_hdr.controlinfo_offset + ci_off, SCE_SEEK_SET);
+    ci_off += sizeof(SceControlInfoDigest256);
+    sceIoRead(inf, &controldigest256, sizeof(SceControlInfoDigest256));
+  }
+  sceIoLseek(inf, self_hdr.controlinfo_offset + ci_off, SCE_SEEK_SET);
+  sceIoRead(inf, &controlinfo_hdr, sizeof(SceControlInfo));
+  ci_off += sizeof(SceControlInfo);
+
+  SceControlInfoDrm controlnpdrm = { 0 };
+  if (controlinfo_hdr.control_type == CONTROL_TYPE_NPDRM_VITA) {
+    sceIoLseek(inf, self_hdr.controlinfo_offset + ci_off, SCE_SEEK_SET);
+    ci_off += sizeof(SceControlInfoDrm);
+    sceIoRead(inf, &controlnpdrm, sizeof(SceControlInfoDrm));
+    printf("content_id: %s\n", controlnpdrm.content_id);
+    npdrmtype = controlnpdrm.npdrm_type;
+  }
+
+  // copy elf header
+  ElfHeader elf_hdr = { 0 };
+  sceIoLseek(inf, self_hdr.elf_offset, SCE_SEEK_SET);
+  sceIoRead(inf, &elf_hdr, sizeof(ElfHeader));
+  sceIoWrite(outf, &elf_hdr, sizeof(ElfHeader));
+
+  // get segments
+  ElfPhdr *elf_phdrs = (ElfPhdr *)malloc(sizeof(ElfPhdr)*elf_hdr.e_phnum);
+  SegmentInfo *segment_infos = (SegmentInfo *)malloc(sizeof(SegmentInfo)*elf_hdr.e_phnum);
+  size_t at = sizeof(ElfHeader);
+  bool encrypted = false;
+  for (int i = 0; i < elf_hdr.e_phnum; i++) {
+    sceIoLseek(inf, self_hdr.phdr_offset + i*sizeof(ElfPhdr), SCE_SEEK_SET);
+    sceIoRead(inf, &elf_phdrs[i], sizeof(ElfPhdr));
+    sceIoWrite(outf, &elf_phdrs[i], sizeof(ElfPhdr));
+    at += sizeof(ElfPhdr);
+    sceIoLseek(inf, self_hdr.segment_info_offset + i*sizeof(SegmentInfo), SCE_SEEK_SET);
+    sceIoRead(inf, &segment_infos[i], sizeof(SegmentInfo));
+    if (segment_infos[i]._plaintext == SECURE_BOOL_NO)
+      encrypted = true;
+  }
+
+  printf("self2elf SceSegment\n");
+  SceSegment *scesegs;
+  if (encrypted) {
+    // keys hardcoded for now
+    KeyEntry key = { 0x36300000000, 0xFFFFFFFFFFFFFFFF, 1, "12d64d0172495226010a687de245a73de028b3561e25e69babc325636f3cae0a", "f149eed1757e5a915b24309795bfc380" };
+    scesegs = get_segments(&inf, &sce_hdr, &key, appinfo_hdr.sys_version, appinfo_hdr._self_type, npdrmtype, klictxt);
+  }
+
+  for (uint16_t i = 0; i < elf_hdr.e_phnum; i++) {
+    int idx = 0;
+    printf("Dumping segment[%d]...\n", i);
+
+    if (scesegs)
+      idx = scesegs[i].idx;
+    else
+      idx = i;
+    if (elf_phdrs[idx].p_filesz == 0)
+      continue;
+
+    int pad_len = elf_phdrs[idx].p_offset - at;
+    if (pad_len < 0) {
+      pad_len = 0;
+    }
+
+    unsigned char *padding = (unsigned char *)malloc(sizeof(unsigned char)*pad_len);
+    memset(padding, '\0', sizeof(unsigned char)*pad_len);
+	  sceIoWrite(outf, padding, pad_len);
+    if (padding)
+      free(padding);
+
+    at += pad_len;
+
+    unsigned char *dat = (unsigned char *)malloc(sizeof(unsigned char)*segment_infos[idx].size);
+    sceIoLseek(inf, segment_infos[idx].offset, SCE_SEEK_SET);
+    sceIoRead(inf, &dat[0], segment_infos[idx].size);
+
+    unsigned char *decrypted_data = (unsigned char *)malloc(sizeof(unsigned char)*segment_infos[idx].size);
+    if (segment_infos[idx]._plaintext == SECURE_BOOL_NO) {
+      aes_context aes_ctx;
+      aes_setkey_enc(&aes_ctx, (unsigned char *)scesegs[i].key, 128);
+      size_t ctr_nc_off = 0;
+      unsigned char ctr_stream_block[0x10];
+      aes_crypt_ctr(&aes_ctx, segment_infos[idx].size, &ctr_nc_off, (unsigned char *)scesegs[i].iv, ctr_stream_block, &dat[0], &decrypted_data[0]);
+    }
+    if (dat)
+      free(dat);
+
+    size_t decompressed_size;
+    if (segment_infos[idx]._compressed == SECURE_BOOL_YES) {
+      unsigned char *decompressed_data = decompress_segments(decrypted_data, segment_infos[idx].size, &decompressed_size);
+      sceIoWrite(outf, decompressed_data, decompressed_size);
+      at += decompressed_size;
+      if (decompressed_data)
+        free(decompressed_data);
+    } else {
+      sceIoWrite(outf, &decrypted_data[0], segment_infos[idx].size);
+      at += segment_infos[idx].size;
+    }
+
+    if (decrypted_data)
+      free(decrypted_data);
+  }
+
+  if (elf_phdrs)
+    free(elf_phdrs);
+
+  if (segment_infos)
+    free(segment_infos);
+
+  sceIoClose(inf);
+  sceIoClose(outf);
+  return 0;
+}
+
+int make_fself(const char *input_path, const char *output_path) {
 	uint32_t mod_nid;
 	uint64_t authid = 0;
 	uint32_t mem_budget = 0;
@@ -407,8 +719,6 @@ int make_fself(void) {
 	uint32_t attribute_cinfo = 0;
 	int compressed = 0;
 	int safe = 2;
-  char *input_path = OUT_FOLDER "/" "libshacccg.suprx.elf";
-  char *output_path = OUT_FOLDER "/" "libshacccg.suprx";
 
   printf("make_fself %s -> %s\n", input_path, output_path);
 
@@ -418,7 +728,7 @@ int make_fself(void) {
 	}
 	printf("module NID 0x%x\n", mod_nid);
 
-  SceUID fin = sceIoOpen(input_path, SCE_O_RDONLY, 0);
+  SceUID fin = sceIoOpen(input_path, SCE_O_RDONLY, 0777);
 	if (!fin) {
 		printf("Failed to open input file\n");
 		goto error;
@@ -678,6 +988,7 @@ int main(int argc, const char *argv[]) {
   }
   user_modid = sceKernelLoadStartModule("app0:sce_module/user.suprx", 0, NULL, 0, NULL, NULL);
 
+#if 0
   search_modid = _vshKernelSearchModuleByName("kentente", search_unk);
   if(search_modid < 0) {
     kentente_modid = taiLoadKernelModule("ux0:app/SHARKF00D/sce_module/kentente.skprx", 0, NULL);
@@ -688,13 +999,31 @@ int main(int argc, const char *argv[]) {
     }
   }
   userallied_modid = sceKernelLoadStartModule("app0:sce_module/userAllied.suprx", 0, NULL, 0, NULL, NULL);
+#endif
 
-  extract("ux0:/patch/PCSI00011/");
-  decrypt();
-  make_fself();
+	sceIoMkdir(OUT_FOLDER, 0777);
 
-	sceIoMkdir("ur0:/data",6);
-  copyFile("ux0:/ShaRKF00D/libshacccg.suprx", "ur0:/data/libshacccg.suprx", 0);
+  // input, output, titleid
+  extract("ux0:/patch/PCSI00011/module/libshacccg.suprx", OUT_FOLDER"/libshacccg.suprx.ext", TITLEID);
+
+#if 0 // decrypt method 1
+  // input, output, titleid
+  decrypt(OUT_FOLDER"/libshacccg.suprx.ext", OUT_FOLDER"/libshacccg.suprx.elf", TITLEID);
+#else // decrypt method 2
+  SceRIF sce_rif = { 0 };
+  //SceUID kf = sceIoOpen("ux0:/license/app/"TITLEID"/6488b73b912a753a492e2714e9b38bc7.rif", SCE_O_RDONLY, 0777);
+  SceUID kf = sceIoOpen("ux0:app/"TITLEID"/sce_sys/package/work.bin", SCE_O_RDONLY, 0777);
+  sceIoRead(kf, &sce_rif, sizeof(SceRIF));
+  sceIoClose(kf);
+  printf("content_id: %s\n", sce_rif.content_id);
+  printf("klicense: %llx\n", *(uint64_t *)sce_rif.klicense);
+  // input, output, license
+  self2elf(OUT_FOLDER"/libshacccg.suprx.ext", OUT_FOLDER"/libshacccg.suprx.elf", sce_rif.klicense);
+#endif
+  make_fself(OUT_FOLDER"/libshacccg.suprx.elf", OUT_FOLDER"/libshacccg.suprx");
+
+	sceIoMkdir("ur0:data", 0777);
+  copyFile("ux0:/ShaRKF00D/libshacccg.suprx", "ur0:data/libshacccg.suprx", 0);
 
 	sceKernelExitProcess(0);
   return 0;
