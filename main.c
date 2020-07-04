@@ -11,7 +11,6 @@
 #include "aes.h"
 
 #include "debugscreen/debugScreen.h"
-#define printf psvDebugScreenPrintf
 
 #define OUT_FOLDER "ux0:/ShaRKF00D"
 #define TITLEID "PCSI00011"
@@ -112,6 +111,24 @@ static SceUID decompressThread_tid, decompress_flag;
 static char *current_file, *current_elf, *current_self;
 static int dump_type = DUMP_ELF;
 
+SceUID log_fd = -1;
+
+void dbgprintf(const char *fmt, ...) {
+  va_list ap;
+  int msg[100];
+
+  va_start(ap, fmt);
+  vsnprintf(msg, sizeof(msg), fmt, ap);
+  va_end( ap );
+  printf(msg); // print to stdout
+  psvDebugScreenPrintf(msg); // print to screen
+
+  if (log_fd < 0) {
+    log_fd = sceIoOpen(OUT_FOLDER"/ShaRKF00D.log", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
+  }
+  sceIoWrite(log_fd, msg, strlen(msg)); // print to file
+}
+
 int extract(const char *src, const char *dst, const char *titleid) {
   int res;
   char path[MAX_PATH_LENGTH];
@@ -120,9 +137,12 @@ int extract(const char *src, const char *dst, const char *titleid) {
 
   snprintf(path, MAX_PATH_LENGTH, "ux0:app/%s", titleid);
   res = pfsMount(path);
+  if (res < 0) {
+    return -1;
+  }
 
   copyFile(src, dst, 0);
-  printf("extract done\n");
+  dbgprintf("extract done\n");
   pfsUmount();
   return 0;
 }
@@ -137,17 +157,17 @@ int decompressThread(unsigned int argc,  void *argv) {
 		SCE_header *shdr = (SCE_header*)(current_self);
 		Elf32_Ehdr *ehdr = (Elf32_Ehdr*)(current_self + shdr->elf_offset);
 		Elf32_Phdr *phdrs = (Elf32_Phdr*)(current_self + shdr->phdr_offset);
-		printf("starting decompress\n");
+		dbgprintf("starting decompress\n");
 		for(int i = 0; i < ehdr->e_phnum; i++) {
 			char current_path[PATH_MAX];
 			snprintf(current_path, PATH_MAX, "%s.seg%i", current_elf, i);
-			printf("checking %s\n",current_path);
+			dbgprintf("checking %s\n",current_path);
 			if(checkExists(current_path)==0) {
-				printf("found\n");
+				dbgprintf("found\n");
 				size_t seg_sz = phdrs[i].p_filesz;
 				int res;
 				if(seg_sz <= 0) {
-					printf("Empty segment, will skip and delete %i\n", i);
+					dbgprintf("Empty segment, will skip and delete %i\n", i);
 					if(i > 0) {
 						uint64_t padding_off =  (phdrs[i-1].p_offset + phdrs[i-1].p_filesz);
 						size_t padding_sz = phdrs[i].p_offset - padding_off;
@@ -156,10 +176,10 @@ int decompressThread(unsigned int argc,  void *argv) {
 							if(padding) {
 								memset(padding, 0, padding_sz);
 								if((res = WriteFileSeek(current_elf, padding, padding_off, padding_sz))<0)
-									printf("Could not write padding: %i,%i\n", i, res);
+									dbgprintf("Could not write padding: %i,%i\n", i, res);
 								free(padding);
 							} else
-								printf("Could not generate padding: %i,%x,%x\n", i, padding_sz, padding_off);
+								dbgprintf("Could not generate padding: %i,%x,%x\n", i, padding_sz, padding_off);
 						}
 					}
 					sceIoRemove(current_path);
@@ -168,32 +188,32 @@ int decompressThread(unsigned int argc,  void *argv) {
 				size_t sz = getFileSize(current_path);
 				char *file_buf = malloc(sz);
 				if(!file_buf) {
-					printf("Could not allocate memory for decompression(file) %i\n", i);
+					dbgprintf("Could not allocate memory for decompression(file) %i\n", i);
 					break;
 				}
 				void *dest_buf = malloc(phdrs[i].p_filesz);
 				if(!dest_buf) {
-					printf("Could not allocate memory for decompression(dest) %i\n", i);
+					dbgprintf("Could not allocate memory for decompression(dest) %i\n", i);
 					free(file_buf);
 					break;
 				}
 				if((res = ReadFile(current_path, file_buf,sz))<0) {
-					printf("Could not read decrypted segment: %i,%x\n", i, res);
+					dbgprintf("Could not read decrypted segment: %i,%x\n", i, res);
 					free(file_buf);
 					free(dest_buf);
 					break;
 				}
 				if((res = uncompress(dest_buf, (long unsigned int *)&seg_sz, file_buf, sz))!= Z_OK) {
 					seg_sz =  phdrs[i].p_filesz;
-					printf("Could not decompress segment, will attempt inflate: %i,%i,%x\n", i, res, phdrs[i].p_type);
+					dbgprintf("Could not decompress segment, will attempt inflate: %i,%i,%x\n", i, res, phdrs[i].p_type);
           free(file_buf);
           free(dest_buf);
           break;
 				}
 				if(dump_type == DUMP_SELF) {
-					printf("Compressing segment for self: %i\n", i);
+					dbgprintf("Compressing segment for self: %i\n", i);
 					if((res = compress(file_buf, (long unsigned int *)&sz, dest_buf, seg_sz))!= Z_OK) {
-						printf("Could not compress: %i,%i,%x\n", i, res, phdrs[i].p_type);
+						dbgprintf("Could not compress: %i,%i,%x\n", i, res, phdrs[i].p_type);
 						free(file_buf);
 						free(dest_buf);
 						break;
@@ -201,22 +221,22 @@ int decompressThread(unsigned int argc,  void *argv) {
 					segment_info *seg = (segment_info*)(current_self + shdr->section_info_offset);
 					seg[i].encryption = 2;
 					if((res = WriteFileSeek(current_file, file_buf, seg[i].offset, sz)) < 0)
-						printf("Could not write decrypted segment to self: %i,%x\n", i, res);
+						dbgprintf("Could not write decrypted segment to self: %i,%x\n", i, res);
 				}
 				free(file_buf);
 				if((res = WriteFileSeek(current_elf, dest_buf, phdrs[i].p_offset, phdrs[i].p_filesz))<0)
-					printf("Could not write decrypted segment to elf: %i,%x\n", i, res);
+					dbgprintf("Could not write decrypted segment to elf: %i,%x\n", i, res);
 				free(dest_buf);
 				if((res = sceIoRemove(current_path))<0)
-					printf("Could not remove decrypted segment to elf: %i,%x\n", i, res);
-				printf("Finished segment %i\n", i);
+					dbgprintf("Could not remove decrypted segment to elf: %i,%x\n", i, res);
+				dbgprintf("Finished segment %i\n", i);
 			}
 		}
 		sceKernelSetEventFlag(decompress_flag, DECOMPRESS_SEGOK);
 
 	}
 	sceKernelSetEventFlag(decompress_flag, DECOMPRESS_SEGOK);
-	sceClibPrintf("would exit\n");
+	dbgprintf("would exit\n");
 	sceKernelExitDeleteThread(0);
 	return 0;
 }
@@ -262,19 +282,19 @@ int decrypt(const char *text, const char *elf_path, const char *titleid) {
 	char aid[8];
 	int res;
 	if(userAlliedStatus() != ENTENTE_DONE) {
-		printf("ERROR kuEntente is busy\n");
+		dbgprintf("ERROR kuEntente is busy\n");
 	}
 	if((res=sceRegMgrGetKeyBin("/CONFIG/NP", "account_id", aid, sizeof(aid)))<0) {
-		printf("Obtaining AID: %x\n", res);
+		dbgprintf("Obtaining AID: %x\n", res);
 		return 0;
 	}
-	printf("Obtaining AID: %x\n", res);
+	dbgprintf("Obtaining AID: %x\n", res);
 	char rif_name[0x30];
 	if((res=_sceNpDrmGetFixedRifName(rif_name, 0, 0LL))<0) {
-		printf("Obtaining Fixed Rif name: %x\n", res);
+		dbgprintf("Obtaining Fixed Rif name: %x\n", res);
 		return 0;
 	}
-	printf("Obtaining Fixed Rif name: %s\n", rif_name);
+	dbgprintf("Obtaining Fixed Rif name: %s\n", rif_name);
 	char rif_path[PATH_MAX];
 	char mount_point[0x11];
 	int auth_type = 0;
@@ -286,24 +306,24 @@ int decrypt(const char *text, const char *elf_path, const char *titleid) {
 		sceKernelStartThread(decompressThread_tid, 0, NULL);
     auth_type = 0;
     system = 1;
-			printf("Decrypting: %s\n", text);
+			dbgprintf("Decrypting: %s\n", text);
 			current_file = current_elf = elf_path;
-			printf("Outpath: %s\n", current_file);
+			dbgprintf("Outpath: %s\n", current_file);
 
 			current_self = malloc(HEADER_LEN);
 			if(!current_self) {
-				printf("Could not allocate memory\n");
+				dbgprintf("Could not allocate memory\n");
 			}
 
-			printf("ReadFile %s current_self\n", text);
+			dbgprintf("ReadFile %s current_self\n", text);
 			if((res = ReadFile(text, current_self, HEADER_LEN)) < 0) {
-				printf("Could not read original self: %x\n", res);
+				dbgprintf("Could not read original self: %x\n", res);
 				free(current_self);
 			}
 
 			char temp_outpath[PATH_MAX];
 			snprintf(temp_outpath, PATH_MAX, "%s.temp", current_elf);
-			printf("current_elf %s\n", temp_outpath);
+			dbgprintf("current_elf %s\n", temp_outpath);
 			current_elf = temp_outpath;
 			ententeParams param;
 			param.rifpath = rif_path;
@@ -314,9 +334,9 @@ int decrypt(const char *text, const char *elf_path, const char *titleid) {
 			if(system) {
 				if(strstr(text,"os0")!=NULL && strstr(text,".skprx")!=NULL) {
 					param.self_type = 0;
-					printf("Setting to system self\n");
+					dbgprintf("Setting to system self\n");
 				}
-			  printf("menu_entr->text %s\n", text);
+			  dbgprintf("menu_entr->text %s\n", text);
 				if(strstr(text,"app_em")  != NULL)
 					param.path_id = 23;
 				else if(strstr(text,"patch_em")  != NULL)
@@ -326,28 +346,28 @@ int decrypt(const char *text, const char *elf_path, const char *titleid) {
 				else if(strstr(text,"os0_em") != NULL)
 					param.path_id = 2;
 
-			  printf("param.path_id %d\n", param.path_id);
+			  dbgprintf("param.path_id %d\n", param.path_id);
 				if(param.path_id == 24||param.path_id == 23) {
 					auth_type = 1;
-					printf("Setting title id to: %s\n", titleid);
+					dbgprintf("Setting title id to: %s\n", titleid);
 					snprintf(rif_path, PATH_MAX, "ux0:app/%s/sce_sys/package/work.bin", titleid);
-			    printf("rif_path %s\n", rif_path);
+			    dbgprintf("rif_path %s\n", rif_path);
 					if(checkExists(rif_path)!=0) {
-						printf("work.bin not found: %s\n", rif_path);
+						dbgprintf("work.bin not found: %s\n", rif_path);
 						param.rifpath = NULL;
 					} else
-						printf("Using work.bin: %s\n", rif_path);
+						dbgprintf("Using work.bin: %s\n", rif_path);
 
 				} else
 					param.rifpath = NULL;
-				printf("Setting path id to %i\n", param.path_id);
+				dbgprintf("Setting path id to %i\n", param.path_id);
 			}
 
 			char auth_outpath[PATH_MAX];
 			char old_path[PATH_MAX];
 			strcpy(old_path, old_path);
 			snprintf(old_path, PATH_MAX, "%s.auth", current_elf);
-			printf("old_path %s\n", old_path);
+			dbgprintf("old_path %s\n", old_path);
 			SCE_header *shdr = (SCE_header*)(current_self);
 			Elf32_Ehdr *ehdr = (Elf32_Ehdr*)(current_self + shdr->elf_offset);
 			SCE_appinfo *appinfo = (SCE_appinfo*)(current_self + shdr->appinfo_offset);
@@ -356,31 +376,31 @@ int decrypt(const char *text, const char *elf_path, const char *titleid) {
 				strcpy(strstr(auth_outpath, ".temp"), ".auth");
 			} else {
 				if(appinfo->self_type != 0x8) {
-					printf("Skipping because not needed\n");
+					dbgprintf("Skipping because not needed\n");
 					free(current_self);
 				}
 				strncpy(auth_outpath, old_path, PATH_MAX);
 				snprintf(auth_outpath, PATH_MAX, "%s/self_auth.bin", OUT_FOLDER);
-				printf("auth path: %s\n", auth_outpath);
+				dbgprintf("auth path: %s\n", auth_outpath);
 			}
 			param.self_auth =  (checkExists(auth_outpath) < 0);
 			userAlliedDecryptSelf(&param);
-			printf("Waiting for decrypter\n");
+			dbgprintf("Waiting for decrypter\n");
 			char buffer[128];
 			while(userAlliedStatus() != ENTENTE_UPDATE);
 			while(1) {
 				if(userAlliedStatus() == ENTENTE_DONESEG) {
 					userAlliedGetLogs(buffer);
-					printf("kuEntente: %s\n", buffer);
+					dbgprintf("kuEntente: %s\n", buffer);
 				}
 				if(userAlliedStatus() == ENTENTE_UPDATE) {
 					userAlliedGetLogs(buffer);
-					printf("kuEntente: %s\n", buffer);
+					dbgprintf("kuEntente: %s\n", buffer);
 				} else if(userAlliedStatus() == ENTENTE_DONE)
 					break;
 			}
 			userAlliedGetLogs(buffer);
-			printf("kuEntente: %s\n", buffer);
+			dbgprintf("kuEntente: %s\n", buffer);
 			sceKernelWaitEventFlag(decompress_flag, DECOMPRESS_SEGOK, SCE_EVENT_WAITAND, 0, 0);
 			sceKernelSetEventFlag(decompress_flag, DECOMPRESS_NEW);
 			sceKernelWaitEventFlag(decompress_flag, DECOMPRESS_SEGOK, SCE_EVENT_WAITAND, 0, 0);
@@ -389,20 +409,20 @@ int decrypt(const char *text, const char *elf_path, const char *titleid) {
 			ehdr->e_shoff = 0;
 
 			if((res = WriteFileSeek(current_elf, current_self + shdr->elf_offset, 0, sizeof(Elf32_Ehdr))) < 0) {
-				printf("Could not write original elfhdr to elf: %x\n", res);
+				dbgprintf("Could not write original elfhdr to elf: %x\n", res);
 				free(current_self);
 			}
 			if((res = WriteFileSeek(current_elf, current_self + shdr->phdr_offset, ehdr->e_phoff, ehdr->e_phentsize * ehdr->e_phnum)) < 0) {
-				printf("Could not write original phdrs to elf: %x\n", res);
+				dbgprintf("Could not write original phdrs to elf: %x\n", res);
 				free(current_self);
 			}
 			if(param.self_auth) {
 				if((res = sceIoRename(old_path, auth_outpath)) < 0)
-					printf("Could not properly save self auth: %x\n", res);
+					dbgprintf("Could not properly save self auth: %x\n", res);
 				else
-					printf("Saved self auth: %s\n", auth_outpath);
+					dbgprintf("Saved self auth: %s\n", auth_outpath);
 			}
-			printf("Stripping NpDRM from header...\n");
+			dbgprintf("Stripping NpDRM from header...\n");
 			uint8_t orig_elf_digest[0x20];
 			PSVita_CONTROL_INFO *control_info = (PSVita_CONTROL_INFO *)(current_self + shdr->controlinfo_offset);
 			while(control_info->next) {
@@ -410,7 +430,7 @@ int decrypt(const char *text, const char *elf_path, const char *titleid) {
 					case 4:
 						control_info->PSVita_elf_digest_info.min_required_fw = 0x0;
 						memcpy(&orig_elf_digest, control_info->PSVita_elf_digest_info.elf_digest, sizeof(orig_elf_digest));
-						printf("Got elf digest\n");
+						dbgprintf("Got elf digest\n");
 						break;
 					case 5:
 						memset(&control_info->PSVita_npdrm_info, 0, sizeof(control_info->PSVita_npdrm_info));
@@ -422,43 +442,43 @@ int decrypt(const char *text, const char *elf_path, const char *titleid) {
 
 			if(dump_type == DUMP_SELF) {
 				if((res = WriteFileSeek(current_file, current_self + shdr->elf_offset, shdr->header_len, sizeof(Elf32_Ehdr))) < 0) {
-					printf("Could not write original elfhdr to self: %x\n", res);
+					dbgprintf("Could not write original elfhdr to self: %x\n", res);
 					free(current_self);
 				}
 				if((res = WriteFileSeek(current_file, current_self + shdr->phdr_offset, shdr->header_len + ehdr->e_phoff, ehdr->e_phentsize * ehdr->e_phnum)) < 0) {
-					printf("Could not write original phdrs to self: %x\n", res);
+					dbgprintf("Could not write original phdrs to self: %x\n", res);
 					free(current_self);
 				}
 				appinfo->version = 0;
 				shdr->sdk_type = 0xc0;
 				if((res = WriteFileSeek(current_file, current_self, 0, 0x600)) < 0) {
-					printf("Could not write original shdr to self: %x\n", res);
+					dbgprintf("Could not write original shdr to self: %x\n", res);
 					free(current_self);
 				}
 				if(dumpVerifyElf(current_elf, orig_elf_digest)) {
-					printf("ELF VERIFIED. PURIST REJOICE!\n");
+					dbgprintf("ELF VERIFIED. PURIST REJOICE!\n");
 					if((res = sceIoRemove(current_elf)) < 0)
-						printf("Could not remove temp elf\n");
+						dbgprintf("Could not remove temp elf\n");
 				} else
-					printf("ELF IS CORRUPTED. IT IS AS BAD AS MAI. Or its too big.\n");
+					dbgprintf("ELF IS CORRUPTED. IT IS AS BAD AS MAI. Or its too big.\n");
 			} else {
         sceIoRemove(elf_path);
 				if((res = sceIoRename(current_elf, elf_path)) < 0) {
-						printf("Could not rename to output: %x\n", res);
+						dbgprintf("Could not rename to output: %x\n", res);
 						free(current_self);
 				}
 				snprintf(temp_outpath, PATH_MAX, "%s.sha256", elf_path);
-				printf("Saving digest to: %s\n", temp_outpath);
+				dbgprintf("Saving digest to: %s\n", temp_outpath);
 				if((res = WriteFile(temp_outpath, &orig_elf_digest, sizeof(orig_elf_digest))) < 0)
-					printf("Error saving digest: %x\n", res);
+					dbgprintf("Error saving digest: %x\n", res);
 			}
 
 			free(current_self);
-			printf("Module done\n");
+			dbgprintf("Module done\n");
 	sceKernelSetEventFlag(decompress_flag, DECOMPRESS_DONE);
 	sceKernelWaitEventFlag(decompress_flag, DECOMPRESS_SEGOK, SCE_EVENT_WAITAND, 0, 0);
 	sceKernelWaitThreadEnd(decompressThread_tid, &res, NULL);
-	printf("Done\n");
+	dbgprintf("Done\n");
 	return 0;
 }
 
@@ -466,7 +486,7 @@ SceSegment *get_segments(SceUID *inf, SceHeader *sce_hdr, KeyEntry *ke, const ui
   unsigned char *dat = (unsigned char *)malloc(sizeof(unsigned char)*(sce_hdr->header_length - sce_hdr->metadata_offset - 48));
   sceIoLseek(*inf, sce_hdr->metadata_offset + 48, SCE_SEEK_SET);
   sceIoRead(*inf, &dat[0], sizeof(unsigned char)*(sce_hdr->header_length - sce_hdr->metadata_offset - 48));
-  printf("dat: %llx\n", *(uint64_t *)dat);
+  dbgprintf("dat: %llx\n", *(uint64_t *)dat);
 
   const char *key = ke->key;
   const char *iv = ke->iv;
@@ -483,12 +503,12 @@ SceSegment *get_segments(SceUID *inf, SceHeader *sce_hdr, KeyEntry *ke, const ui
     aes_setkey_dec(&aes_ctx, np_key_bytes, 128);
     memset(np_iv_bytes, 0, sizeof(np_iv_bytes));
     aes_crypt_cbc(&aes_ctx, AES_DECRYPT, sizeof(predec), np_iv_bytes, klictxt, predec);
-    printf("predec: %llx %llx\n", *(uint64_t *)&predec[0], *(uint64_t *)(&predec[8]));
+    dbgprintf("predec: %llx %llx\n", *(uint64_t *)&predec[0], *(uint64_t *)(&predec[8]));
 
     aes_setkey_dec(&aes_ctx, predec, 128);
     memset(np_iv_bytes, 0, sizeof(np_iv_bytes));
     aes_crypt_cbc(&aes_ctx, AES_DECRYPT, sizeof(MetadataInfo), np_iv_bytes, &dat[0], (unsigned char *)&dec_in);
-    printf("dec_in: %llx\n", *(uint64_t *)&dec_in);
+    dbgprintf("dec_in: %llx\n", *(uint64_t *)&dec_in);
   } else {
     memcpy((unsigned char *)&dec_in, &dat[0], sizeof(MetadataInfo));
   }
@@ -500,14 +520,14 @@ SceSegment *get_segments(SceUID *inf, SceHeader *sce_hdr, KeyEntry *ke, const ui
   aes_crypt_cbc(&aes_ctx, AES_DECRYPT, 64, iv_bytes, (unsigned char *)&dec_in, (unsigned char *)&dec);
 
   MetadataInfo *metadata_info = (MetadataInfo *)(&dec);
-  printf("key: %llx\n", *(uint64_t *)metadata_info->key);
+  dbgprintf("key: %llx\n", *(uint64_t *)metadata_info->key);
 
   unsigned char *dec1 = (unsigned char *)malloc(sizeof(unsigned char) * (sce_hdr->header_length - sce_hdr->metadata_offset - 48 - sizeof(MetadataInfo)));
   aes_setkey_dec(&aes_ctx, metadata_info->key, 128);
   aes_crypt_cbc(&aes_ctx, AES_DECRYPT, sce_hdr->header_length - sce_hdr->metadata_offset - 48 - sizeof(MetadataInfo), metadata_info->iv, &dat[64], &dec1[0]);
 
   MetadataHeader *metadata_hdr = (MetadataHeader *)(&dec1[0]);
-  printf("signature_input_length: 0x%llx\n", metadata_hdr->signature_input_length);
+  dbgprintf("signature_input_length: 0x%llx\n", metadata_hdr->signature_input_length);
 
   SceSegment *segs = (SceSegment *)malloc(sizeof(SceSegment)*metadata_hdr->section_count);
   off_t start = sizeof(MetadataHeader) + metadata_hdr->section_count * sizeof(MetadataSection);
@@ -544,7 +564,7 @@ unsigned char *decompress_segments(const unsigned char *decrypted_data, const si
   stream.avail_in = 0;
   stream.next_in = Z_NULL;
   if (inflateInit(&stream) != Z_OK) {
-      printf("inflateInit failed while decompressing\n");
+      dbgprintf("inflateInit failed while decompressing\n");
       return "";
   }
 
@@ -562,7 +582,7 @@ unsigned char *decompress_segments(const unsigned char *decrypted_data, const si
   inflateEnd(&stream);
 
   if (ret != Z_STREAM_END) {
-      printf("Exception during zlib decompression: ({}) {}", ret, stream.msg);
+      dbgprintf("Exception during zlib decompression: ({}) {}", ret, stream.msg);
       return "";
   }
   return decompressed_data;
@@ -575,8 +595,12 @@ int self2elf(const char *infile, const char *outfile, const char *klictxt) {
 
   SceHeader sce_hdr = { 0 };
   sceIoRead(inf, &sce_hdr, sizeof(SceHeader));
-  printf("magic: 0x%x\n", sce_hdr.magic);
-  printf("data_length: 0x%llx\n", sce_hdr.data_length);
+  dbgprintf("magic: 0x%x\n", sce_hdr.magic);
+  dbgprintf("data_length: 0x%llx\n", sce_hdr.data_length);
+  if (sce_hdr.magic != 0x454353) { // 'SCE'
+    dbgprintf("Error: invalid sce header (magic != SCE)");
+    return -1;
+  }
 
   SelfHeader self_hdr = { 0 };
   sceIoRead(inf, &self_hdr, sizeof(SelfHeader));
@@ -584,7 +608,7 @@ int self2elf(const char *infile, const char *outfile, const char *klictxt) {
   AppInfoHeader appinfo_hdr = { 0 };
   sceIoLseek(inf, self_hdr.appinfo_offset, SCE_SEEK_SET);
   sceIoRead(inf, &appinfo_hdr, sizeof(AppInfoHeader));
-  printf("sys_version: 0x%llx\n", appinfo_hdr.sys_version);
+  dbgprintf("sys_version: 0x%llx\n", appinfo_hdr.sys_version);
 
   SceVersionInfo verinfo_hdr = { 0 };
   sceIoLseek(inf, self_hdr.sceversion_offset, SCE_SEEK_SET);
@@ -593,7 +617,7 @@ int self2elf(const char *infile, const char *outfile, const char *klictxt) {
   SceControlInfo controlinfo_hdr = { 0 };
   sceIoLseek(inf, self_hdr.controlinfo_offset, SCE_SEEK_SET);
   sceIoRead(inf, &controlinfo_hdr, sizeof(SceControlInfo));
-  printf("size: 0x%lx\n", controlinfo_hdr.size);
+  dbgprintf("size: 0x%lx\n", controlinfo_hdr.size);
   size_t ci_off = sizeof(SceControlInfo);
 
   SceControlInfoDigest256 controldigest256 = { 0 };
@@ -611,7 +635,7 @@ int self2elf(const char *infile, const char *outfile, const char *klictxt) {
     sceIoLseek(inf, self_hdr.controlinfo_offset + ci_off, SCE_SEEK_SET);
     ci_off += sizeof(SceControlInfoDrm);
     sceIoRead(inf, &controlnpdrm, sizeof(SceControlInfoDrm));
-    printf("content_id: %s\n", controlnpdrm.content_id);
+    dbgprintf("content_id: %s\n", controlnpdrm.content_id);
     npdrmtype = controlnpdrm.npdrm_type;
   }
 
@@ -637,7 +661,7 @@ int self2elf(const char *infile, const char *outfile, const char *klictxt) {
       encrypted = true;
   }
 
-  printf("self2elf SceSegment\n");
+  dbgprintf("self2elf SceSegment\n");
   SceSegment *scesegs;
   if (encrypted) {
     // keys hardcoded for now
@@ -647,7 +671,7 @@ int self2elf(const char *infile, const char *outfile, const char *klictxt) {
 
   for (uint16_t i = 0; i < elf_hdr.e_phnum; i++) {
     int idx = 0;
-    printf("Dumping segment[%d]...\n", i);
+    dbgprintf("Dumping segment[%d]...\n", i);
 
     if (scesegs)
       idx = scesegs[i].idx;
@@ -720,17 +744,17 @@ int make_fself(const char *input_path, const char *output_path) {
 	int compressed = 0;
 	int safe = 2;
 
-  printf("make_fself %s -> %s\n", input_path, output_path);
+  dbgprintf("make_fself %s -> %s\n", input_path, output_path);
 
   if (sha256_32_file(input_path, &mod_nid) != 0) {
-		printf("Cannot generate module NID");
+		dbgprintf("Cannot generate module NID");
 		goto error;
 	}
-	printf("module NID 0x%x\n", mod_nid);
+	dbgprintf("module NID 0x%x\n", mod_nid);
 
   SceUID fin = sceIoOpen(input_path, SCE_O_RDONLY, 0777);
 	if (!fin) {
-		printf("Failed to open input file\n");
+		dbgprintf("Failed to open input file\n");
 		goto error;
 	}
 	sceIoLseek(fin, 0, SCE_SEEK_END);
@@ -739,7 +763,7 @@ int make_fself(const char *input_path, const char *output_path) {
 
 	char *input = calloc(1, sz);
 	if (!input) {
-		printf("Failed to allocate buffer for input file\n");
+		dbgprintf("Failed to allocate buffer for input file\n");
 		goto error;
 	}
 	if (sceIoRead(fin, input, sz) < 0) {
@@ -841,13 +865,13 @@ int make_fself(const char *input_path, const char *output_path) {
 
   SceUID fout = sceIoOpen(output_path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
 	if (!fout) {
-		printf("Failed to open output file\n");
+		dbgprintf("Failed to open output file\n");
 		goto error;
 	}
 
 	sceIoLseek(fout, hdr.appinfo_offset, SCE_SEEK_SET);
 	if (sceIoWrite(fout, &appinfo, sizeof(SCE_appinfo)) < 0) {
-		printf("Failed to write appinfo\n");
+		dbgprintf("Failed to write appinfo\n");
 		goto error;
 	}
 
@@ -861,7 +885,7 @@ int make_fself(const char *input_path, const char *output_path) {
 		if (phdr->p_align > 0x1000)
 			phdr->p_align = 0x1000;
 		if (sceIoWrite(fout, phdr, sizeof(Elf32_Phdr)) < 0) {
-			printf("Failed to write phdr\n");
+			dbgprintf("Failed to write phdr\n");
 			goto error;
 		}
 	}
@@ -877,14 +901,14 @@ int make_fself(const char *input_path, const char *output_path) {
 		sinfo.compression = 1;
 		sinfo.encryption = 2;
 		if (sceIoWrite(fout, &sinfo, sizeof(segment_info)) < 0) {
-			printf("Failed to write segment info\n");
+			dbgprintf("Failed to write segment info\n");
 			goto error;
 		}
 	}
 
 	sceIoLseek(fout, hdr.sceversion_offset, SCE_SEEK_SET);
 	if (sceIoWrite(fout, &ver, sizeof(SCE_version)) < 0) {
-		printf("Failed to write SCE_version\n");
+		dbgprintf("Failed to write SCE_version\n");
 		goto error;
 	}
 
@@ -896,7 +920,7 @@ int make_fself(const char *input_path, const char *output_path) {
 	if (!compressed) {
 		sceIoLseek(fout, HEADER_LEN, SCE_SEEK_SET);
 		if (sceIoWrite(fout, input, sz) < 0) {
-			printf("Failed to write a copy of input ELF\n");
+			dbgprintf("Failed to write a copy of input ELF\n");
 			goto error;
 		}
 	} else {
@@ -907,7 +931,7 @@ int make_fself(const char *input_path, const char *output_path) {
 			sinfo.length = 2 * phdr->p_filesz + 12;
 			if (compress2(buf, (uLongf *)&sinfo.length, (unsigned char *)input + phdr->p_offset, phdr->p_filesz, Z_BEST_COMPRESSION) != Z_OK) {
 				free(buf);
-				printf("compress failed\n");
+				dbgprintf("compress failed\n");
 				goto error;
 			}
 			// padding
@@ -920,13 +944,13 @@ int make_fself(const char *input_path, const char *output_path) {
 			sinfo.encryption = 2;
 			sceIoLseek(fout, hdr.section_info_offset + i * sizeof(segment_info), SCE_SEEK_SET);
 			if (sceIoWrite(fout, &sinfo, sizeof(sinfo)) < 0) {
-				printf("Failed to write segment info\n");
+				dbgprintf("Failed to write segment info\n");
 				free(buf);
 				goto error;
 			}
 			sceIoLseek(fout, sinfo.offset, SCE_SEEK_SET);
 			if (sceIoWrite(fout, buf, sinfo.length) < 0) {
-				printf("Failed to write segment to fself\n");
+				dbgprintf("Failed to write segment to fself\n");
 				goto error;
 			}
 			free(buf);
@@ -937,26 +961,27 @@ int make_fself(const char *input_path, const char *output_path) {
   hdr.self_filesize = sceIoLseek(fout, 0, SCE_SEEK_CUR);
 	sceIoLseek(fout, 0, SCE_SEEK_SET);
 	if (sceIoWrite(fout, &hdr, sizeof(hdr)) < 0) {
-		printf("Failed to write SCE header\n");
+		dbgprintf("Failed to write SCE header\n");
 		goto error;
 	}
 
 	sceIoClose(fout);
-  printf("make_fself done\n");
+  dbgprintf("make_fself done\n");
 	return 0;
 error:
-  printf("make_fself error\n");
+  dbgprintf("make_fself error\n");
 	if (fin)
 		sceIoClose(fin);
 	if (fout)
 		sceIoClose(fout);
-	return 1;
+	return -1;
 
 }
 
 int main(int argc, const char *argv[]) {
   SceUID patch_modid = -1, kernel_modid = -1, user_modid = -1;
   SceUID kentente_modid = -1, userallied_modid = -1;
+  int res;
 
   psvDebugScreenInit();
 
@@ -964,26 +989,31 @@ int main(int argc, const char *argv[]) {
   int search_unk[2];
   SceUID search_modid;
   search_modid = _vshKernelSearchModuleByName("VitaShellPatch", search_unk);
-    printf("_vshKernelSearchModuleByName VitaShellPatch 0x%x\n", search_modid);
+  dbgprintf("VitaShellPatch search module id 0x%x\n", search_modid);
   if(search_modid < 0) {
     patch_modid = taiLoadKernelModule("ux0:app/SHARKF00D/sce_module/patch.skprx", 0, NULL);
-    printf("taiLoadKernelModule patch skprx 0x%x\n", patch_modid);
+    dbgprintf("taiLoadKernelModule patch skprx 0x%x\n", patch_modid);
     if (patch_modid >= 0) {
-      int res = taiStartKernelModule(patch_modid, 0, NULL, 0, NULL, NULL);
-    printf("taiStartKernelModule patch skprx 0x%x\n", res);
-      if (res < 0)
+      res = taiStartKernelModule(patch_modid, 0, NULL, 0, NULL, NULL);
+      dbgprintf("taiStartKernelModule patch skprx 0x%x\n", res);
+      if (res < 0) {
         taiStopUnloadKernelModule(patch_modid, 0, NULL, 0, NULL, NULL);
+        dbgprintf("Error loading patch.skprx\n");
+      }
     }
   }
   search_modid = _vshKernelSearchModuleByName("VitaShellKernel2", search_unk);
+  dbgprintf("VitaShellKernel2 search module id 0x%x\n", search_modid);
   if(search_modid < 0) {
     kernel_modid = taiLoadKernelModule("ux0:app/SHARKF00D/sce_module/kernel.skprx", 0, NULL);
-    printf("taiLoadKernelModule kernel skprx 0x%x\n", kernel_modid);
+    dbgprintf("taiLoadKernelModule kernel skprx 0x%x\n", kernel_modid);
     if (kernel_modid >= 0) {
-      int res = taiStartKernelModule(kernel_modid, 0, NULL, 0, NULL, NULL);
-    printf("taiStartKernelModule kernel skprx 0x%x\n", res);
-      if (res < 0)
+      res = taiStartKernelModule(kernel_modid, 0, NULL, 0, NULL, NULL);
+      dbgprintf("taiStartKernelModule kernel skprx 0x%x\n", res);
+      if (res < 0) {
         taiStopUnloadKernelModule(kernel_modid, 0, NULL, 0, NULL, NULL);
+        dbgprintf("Error loading kernel.skprx\n");
+      }
     }
   }
   user_modid = sceKernelLoadStartModule("app0:sce_module/user.suprx", 0, NULL, 0, NULL, NULL);
@@ -1004,27 +1034,58 @@ int main(int argc, const char *argv[]) {
 	sceIoMkdir(OUT_FOLDER, 0777);
 
   // input, output, titleid
-  extract("ux0:/patch/PCSI00011/module/libshacccg.suprx", OUT_FOLDER"/libshacccg.suprx.ext", TITLEID);
+  //extract("ux0:/app/PCSI00011/module/libshacccg.suprx", OUT_FOLDER"/libshacccg.suprx.ext", TITLEID);
+  res = extract("ux0:/patch/PCSI00011/module/libshacccg.suprx", OUT_FOLDER"/libshacccg.suprx.ext", TITLEID);
+  if (res < 0) {
+    dbgprintf("Error on extraction, exiting...\n");
+    if (log_fd > 0) {
+      sceIoClose(log_fd);
+    }
+    sceKernelExitProcess(0);
+    return -1;
+  }
 
 #if 0 // decrypt method 1
   // input, output, titleid
-  decrypt(OUT_FOLDER"/libshacccg.suprx.ext", OUT_FOLDER"/libshacccg.suprx.elf", TITLEID);
+  res = decrypt(OUT_FOLDER"/libshacccg.suprx.ext", OUT_FOLDER"/libshacccg.suprx.elf", TITLEID);
 #else // decrypt method 2
-  SceRIF sce_rif = { 0 };
+  //SceRIF sce_rif = { 0 };
   //SceUID kf = sceIoOpen("ux0:/license/app/"TITLEID"/6488b73b912a753a492e2714e9b38bc7.rif", SCE_O_RDONLY, 0777);
-  SceUID kf = sceIoOpen("ux0:app/"TITLEID"/sce_sys/package/work.bin", SCE_O_RDONLY, 0777);
-  sceIoRead(kf, &sce_rif, sizeof(SceRIF));
-  sceIoClose(kf);
-  printf("content_id: %s\n", sce_rif.content_id);
-  printf("klicense: %llx\n", *(uint64_t *)sce_rif.klicense);
+  //SceUID kf = sceIoOpen("ux0:app/"TITLEID"/sce_sys/package/work.bin", SCE_O_RDONLY, 0777);
+  //sceIoRead(kf, &sce_rif, sizeof(SceRIF));
+  //sceIoClose(kf);
+  //unsigned char *klicense = sce_rif.klicense;
+  unsigned char klicense[16] = { 0xf2, 0xd2, 0x01, 0x64, 0xc5, 0x8e, 0xae, 0x66, 0x69, 0x51, 0xf7, 0x8e, 0xa6, 0x3b, 0xeb, 0x88 };
+  //dbgprintf("content_id: %s\n", sce_rif.content_id);
+  dbgprintf("klicense: %llx\n", *(uint64_t *)klicense);
   // input, output, license
-  self2elf(OUT_FOLDER"/libshacccg.suprx.ext", OUT_FOLDER"/libshacccg.suprx.elf", sce_rif.klicense);
+  res = self2elf(OUT_FOLDER"/libshacccg.suprx.ext", OUT_FOLDER"/libshacccg.suprx.elf", klicense);
 #endif
-  make_fself(OUT_FOLDER"/libshacccg.suprx.elf", OUT_FOLDER"/libshacccg.suprx");
+  if (res < 0) {
+    dbgprintf("Error on decryption, exiting...\n");
+    if (log_fd > 0) {
+      sceIoClose(log_fd);
+    }
+    sceKernelExitProcess(0);
+    return -1;
+  }
+  res = make_fself(OUT_FOLDER"/libshacccg.suprx.elf", OUT_FOLDER"/libshacccg.suprx");
+  if (res < 0) {
+    dbgprintf("Error on fself, exiting...\n");
+    if (log_fd > 0) {
+      sceIoClose(log_fd);
+    }
+    sceKernelExitProcess(0);
+    return -1;
+  }
 
 	sceIoMkdir("ur0:data", 0777);
   copyFile("ux0:/ShaRKF00D/libshacccg.suprx", "ur0:data/libshacccg.suprx", 0);
-
+  dbgprintf("File successfully saved to ur0:data/libshacccg.suprx\n");
+  dbgprintf("exiting...\n");
+  if (log_fd > 0) {
+    sceIoClose(log_fd);
+  }
 	sceKernelExitProcess(0);
   return 0;
 }
