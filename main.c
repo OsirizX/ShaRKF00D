@@ -1082,6 +1082,11 @@ int main(int argc, const char *argv[]) {
 	sceIoMkdir("ur0:data", 0777);
   copyFile("ux0:/ShaRKF00D/libshacccg.suprx", "ur0:data/libshacccg.suprx", 0);
   dbgprintf("File successfully saved to ur0:data/libshacccg.suprx\n");
+
+  sceIoRemove("ux0:/ShaRKF00D/libshacccg.suprx.ext");
+  sceIoRemove("ux0:/ShaRKF00D/libshacccg.suprx.elf");
+  sceIoRemove("ux0:/ShaRKF00D/libshacccg.suprx");
+
   dbgprintf("exiting...\n");
   if (log_fd > 0) {
     sceIoClose(log_fd);
