@@ -1,5 +1,7 @@
 # ShaRKF00D
-ShaRKF00D is an all in one extractor, decrypter, and installer for SceShaccCg module which complements vitaShaRK https://github.com/Rinnegatamante/vitaShaRK
+ShaRKF00D is an all in one extractor, decrypter, and installer for SceShaccCg module which complements Rinnegatamante's vitaShaRK 
+
+https://github.com/Rinnegatamante/vitaShaRK
 
 This project makes use of many already existing tools and is just put together to make it easier to obtain the SceShaccCg module.
 
@@ -13,6 +15,10 @@ Run the app and wait for it to exit out. There is no user dialogue for now.
 You should now have libshacccg.suprx module in ur0:/data/. You can check with VitaShell or ftp.
 The decrypted elf version of the file will be under ux0:/ShaRKF00D/. You may delete this if you like.
 
+A step by step guide by Samilop Cimmerian Iter can also be found in the link below.
+
+https://samilops2.gitbook.io/vita-troubleshooting-guide/shader-compiler/extract-libshacccg.suprx
+
 # Build Instructions
 ```
 chmod +x build.sh
@@ -23,6 +29,8 @@ mkdir build && cd build
 # Credits
 
 **TheFlow** for VitaShell.
+
 **CelesteBlue/dots-tb** for FAGDec.
+
 All of whom that were involved with the development of vita-make-fself.
 
